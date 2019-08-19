@@ -1,0 +1,7 @@
+proxy_type: auto
+sketchbook_path: /Users/nobo/Documents/Arduino
+arduino_data: /Users/nobo/Library/Arduino15
+board_manager:
+  additional_urls:
+  - http://arduino.esp8266.com/stable/package_esp8266com_index.json
+  - https://dl.espressif.com/dl/package_esp32_index.json

@@ -1,226 +1,531 @@
+#include <Arduino.h>
 #include <M5Stack.h>
 #include <SPI.h>
+#include <Wire.h>
+#include <math.h>
+#include "driver/i2s.h"
 
 SPIClass *vspi = NULL;
 
-#define SampleRate 22050
-const float dt = 1.0 / float(SampleRate);
+//#define BeginNote 1
+//#define EndNote 128
+#define BeginNote (36)
+#define EndNote (85)
+#define SampleRate 16000
+#define DMABufCount 16
+#define DMABufLength 64
+//#define DMAWriteLength 64
+#define MasterGain 0.1
+#define BarView true
+const uint16_t I2CSlaveAddr = 0x12;
 
-const float tone[128] = {
-    0.12231220585508576, 0.11544734923405088, 0.10896778740921317, 0.102851895445316,
-    0.09707926212145707, 0.09163062181053622, 0.08648779018201608, 0.08163360351340897,
-    0.07705186140794874, 0.07272727272727272, 0.06864540455866863, 0.06479263404657011,
-    0.06115610292754288, 0.05772367461702544, 0.05448389370460659, 0.051425947722658,
-    0.04853963106072853, 0.04581531090526811, 0.04324389509100804, 0.040816801756704484,
-    0.03852593070397437, 0.03636363636363636, 0.03432270227933431, 0.03239631702328507,
-    0.03057805146377144, 0.02886183730851272, 0.027241946852303304, 0.025712973861329,
-    0.024269815530364256, 0.022907655452634058, 0.02162194754550402, 0.020408400878352235,
-    0.019262965351987186, 0.01818181818181818, 0.017161351139667155, 0.016198158511642535,
-    0.01528902573188572, 0.01443091865425636, 0.013620973426151652, 0.0128564869306645,
-    0.012134907765182128, 0.011453827726317029, 0.01081097377275201, 0.010204200439176117,
-    0.009631482675993593, 0.00909090909090909, 0.008580675569833577, 0.008099079255821266,
-    0.00764451286594286, 0.00721545932712818, 0.006810486713075825, 0.00642824346533225,
-    0.006067453882591066, 0.005726913863158514, 0.005405486886376005, 0.00510210021958806,
-    0.0048157413379967965, 0.004545454545454545, 0.004290337784916789, 0.004049539627910633,
-    0.00382225643297143, 0.00360772966356409, 0.0034052433565379125, 0.003214121732666125,
-    0.003033726941295533, 0.002863456931579257, 0.0027027434431880024, 0.00255105010979403,
-    0.0024078706689983982, 0.0022727272727272726, 0.0021451688924583943, 0.0020247698139553164,
-    0.001911128216485715, 0.001803864831782045, 0.0017026216782689563, 0.0016070608663330626,
-    0.0015168634706477664, 0.0014317284657896286, 0.0013513717215940012, 0.001275525054897015,
-    0.0012039353344991991, 0.0011363636363636363, 0.0010725844462291972, 0.0010123849069776582,
-    0.0009555641082428575, 0.0009019324158910225, 0.0008513108391344781, 0.0008035304331665313,
-    0.0007584317353238832, 0.0007158642328948143, 0.0006756858607970006, 0.0006377625274485074,
-    0.0006019676672495996, 0.0005681818181818182, 0.0005362922231145986, 0.0005061924534888292,
-    0.00047778205412142875, 0.00045096620794551125, 0.0004256554195672391, 0.00040176521658326564,
-    0.0003792158676619415, 0.00035793211644740715, 0.0003378429303985003, 0.00031888126372425367,
-    0.0003009838336247998, 0.0002840909090909091, 0.0002681461115572993, 0.0002530962267444146,
-    0.00023889102706071437, 0.00022548310397275563, 0.00021282770978361956, 0.00020088260829163282,
-    0.00018960793383097075, 0.00017896605822370358, 0.00016892146519925015, 0.00015944063186212683,
-    0.0001504919168123999, 0.00014204545454545454, 0.00013407305577864967, 0.00012654811337220725,
-    0.00011944551353035719, 0.00011274155198637781, 0.00010641385489180974, 0.00010044130414581641,
-    9.480396691548542e-05, 8.948302911185177e-05, 8.446073259962508e-05, 7.972031593106344e-05};
+const float form[] = {
+    0.0,
+    0.049067674327418015,
+    0.0980171403295606,
+    0.14673047445536175,
+    0.19509032201612825,
+    0.24298017990326387,
+    0.29028467725446233,
+    0.33688985339222005,
+    0.3826834323650898,
+    0.4275550934302821,
+    0.47139673682599764,
+    0.5141027441932217,
+    0.5555702330196022,
+    0.5956993044924334,
+    0.6343932841636455,
+    0.6715589548470183,
+    0.7071067811865475,
+    0.740951125354959,
+    0.7730104533627369,
+    0.8032075314806448,
+    0.8314696123025451,
+    0.8577286100002721,
+    0.8819212643483549,
+    0.9039892931234433,
+    0.9238795325112867,
+    0.9415440651830208,
+    0.9569403357322089,
+    0.970031253194544,
+    0.9807852804032304,
+    0.989176509964781,
+    0.9951847266721968,
+    0.9987954562051724,
+    1.0,
+    0.9987954562051724,
+    0.9951847266721969,
+    0.989176509964781,
+    0.9807852804032304,
+    0.970031253194544,
+    0.9569403357322089,
+    0.9415440651830208,
+    0.9238795325112867,
+    0.9039892931234434,
+    0.881921264348355,
+    0.8577286100002721,
+    0.8314696123025455,
+    0.8032075314806449,
+    0.7730104533627371,
+    0.740951125354959,
+    0.7071067811865476,
+    0.6715589548470186,
+    0.6343932841636455,
+    0.5956993044924335,
+    0.5555702330196022,
+    0.5141027441932218,
+    0.4713967368259978,
+    0.42755509343028203,
+    0.38268343236508984,
+    0.3368898533922203,
+    0.29028467725446233,
+    0.24298017990326404,
+    0.19509032201612858,
+    0.1467304744553618,
+    0.09801714032956084,
+    0.04906767432741797,
+    1.2246467991473532e-16,
+    -0.049067674327417724,
+    -0.09801714032956059,
+    -0.14673047445536158,
+    -0.19509032201612836,
+    -0.24298017990326382,
+    -0.29028467725446216,
+    -0.3368898533922201,
+    -0.38268343236508967,
+    -0.4275550934302818,
+    -0.47139673682599764,
+    -0.5141027441932216,
+    -0.555570233019602,
+    -0.5956993044924332,
+    -0.6343932841636453,
+    -0.6715589548470184,
+    -0.7071067811865475,
+    -0.7409511253549588,
+    -0.7730104533627367,
+    -0.803207531480645,
+    -0.8314696123025452,
+    -0.857728610000272,
+    -0.8819212643483549,
+    -0.9039892931234431,
+    -0.9238795325112865,
+    -0.9415440651830208,
+    -0.9569403357322088,
+    -0.970031253194544,
+    -0.9807852804032303,
+    -0.9891765099647809,
+    -0.9951847266721969,
+    -0.9987954562051724,
+    -1.0,
+    -0.9987954562051724,
+    -0.9951847266721969,
+    -0.9891765099647809,
+    -0.9807852804032304,
+    -0.970031253194544,
+    -0.9569403357322089,
+    -0.9415440651830209,
+    -0.9238795325112866,
+    -0.9039892931234433,
+    -0.881921264348355,
+    -0.8577286100002722,
+    -0.8314696123025456,
+    -0.8032075314806453,
+    -0.7730104533627369,
+    -0.7409511253549592,
+    -0.7071067811865477,
+    -0.6715589548470187,
+    -0.6343932841636459,
+    -0.5956993044924332,
+    -0.5555702330196022,
+    -0.5141027441932219,
+    -0.4713967368259979,
+    -0.42755509343028253,
+    -0.3826834323650904,
+    -0.33688985339222,
+    -0.29028467725446244,
+    -0.24298017990326418,
+    -0.19509032201612872,
+    -0.1467304744553624,
+    -0.09801714032956052,
+    -0.0490676743274180,
+};
+const int formLen = sizeof(form) / sizeof(float);
+
+const float toneMap[] = {
+    16.351597831287414, 17.323914436054505,
+    18.354047994837977, 19.445436482630058,
+    20.601722307054366, 21.826764464562746,
+    23.12465141947715,  24.499714748859326,
+    25.956543598746574, 27.5,
+    29.13523509488062,  30.86770632850775,
+    32.70319566257483,  34.64782887210901,
+    36.70809598967594,  38.890872965260115,
+    41.20344461410875,  43.653528929125486,
+    46.2493028389543,   48.999429497718666,
+    51.91308719749314,  55.0,
+    58.27047018976124,  61.7354126570155,
+    65.40639132514966,  69.29565774421802,
+    73.41619197935188,  77.78174593052023,
+    82.4068892282175,   87.30705785825097,
+    92.4986056779086,   97.99885899543733,
+    103.82617439498628, 110.0,
+    116.54094037952248, 123.47082531403103,
+    130.8127826502993,  138.59131548843604,
+    146.8323839587038,  155.56349186104046,
+    164.81377845643496, 174.61411571650194,
+    184.9972113558172,  195.99771799087463,
+    207.65234878997256, 220.0,
+    233.08188075904496, 246.94165062806206,
+    261.6255653005986,  277.1826309768721,
+    293.6647679174076,  311.1269837220809,
+    329.6275569128699,  349.2282314330039,
+    369.9944227116344,  391.99543598174927,
+    415.3046975799451,  440.0,
+    466.1637615180899,  493.8833012561241,
+    523.2511306011972,  554.3652619537442,
+    587.3295358348151,  622.2539674441618,
+    659.2551138257398,  698.4564628660078,
+    739.9888454232688,  783.9908719634985,
+    830.6093951598903,  880.0,
+    932.3275230361799,  987.7666025122483,
+    1046.5022612023945, 1108.7305239074883,
+    1174.6590716696303, 1244.5079348883237,
+    1318.5102276514797, 1396.9129257320155,
+    1479.9776908465376, 1567.981743926997,
+    1661.2187903197805, 1760.0,
+    1864.6550460723597, 1975.533205024496,
+    2093.004522404789,  2217.4610478149766,
+    2349.31814333926,   2489.0158697766474,
+    2637.02045530296,   2793.825851464031,
+    2959.955381693075,  3135.9634878539946,
+    3322.437580639561,  3520.0,
+    3729.3100921447194, 3951.066410048992,
+    4186.009044809578,  4434.922095629953,
+    4698.63628667852,   4978.031739553295,
+    5274.04091060592,   5587.651702928062,
+    5919.91076338615,   6271.926975707989,
+    6644.875161279122,  7040.0,
+    7458.620184289437,  7902.132820097988,
+    8372.018089619156,  8869.844191259906,
+    9397.272573357044,  9956.06347910659,
+    10548.081821211836, 11175.303405856126,
+    11839.8215267723,   12543.853951415975,
+    13289.750322558246, 14080.0,
+    14917.240368578874, 15804.265640195976,
+    16744.036179238312, 17739.688382519813,
+    18794.54514671409,  19912.12695821318,
+    21096.16364242367,  22350.606811712252,
+    23679.6430535446,   25087.70790283195,
+    26579.50064511649,  28160.0,
+};
 
 uint8_t control[128];
 //  1: stick upper(0: neutral, 127: full swing)
 //  2: stick lower(0: neutral, 127: full swing)
 // 64: sustain(0: off, 127: sustain)
-uint8_t pitch = 64;
+float pitch = 0.0;
 
-struct Params
-{
+struct Params {
   float attack;
   float decay;
   float sustainLevel;
   float sustainRate;
   float sustain;
   float release;
-  float form[64];
+  const float *form;
 };
 
-struct Note
-{
+struct Note {
   uint8_t vel;
+  bool on;
   bool top;
   float gain;
   float phase;
 };
 
 Params params;
-struct Note notes[128];
-float gains[128];
-hw_timer_t *timer = NULL;
-portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
+struct Note notes[128] = {};
 
-float env(struct Note *n);
+SemaphoreHandle_t xMutex = NULL;
 
-void IRAM_ATTR onTimer()
-{
-  portENTER_CRITICAL_ISR(&timerMux);
-  for (int i = 0; i < 128; i++)
-  {
-    gains[i] = env(&notes[i]);
-  }
-  portEXIT_CRITICAL_ISR(&timerMux);
+uint8_t i2cWrite(uint8_t addr, uint8_t data) {
+  Wire.beginTransmission(I2CSlaveAddr);
+  Wire.write(addr);
+  Wire.write(data);
+  return Wire.endTransmission();
 }
 
-void setup()
-{
+uint8_t spiRead() {
+  uint8_t v;
+  vspi->beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE1));
+  digitalWrite(5, LOW);  // pull SS slow to prep other end for transfer
+  v = vspi->transfer(0xFE);
+  digitalWrite(5, HIGH);  // pull ss high to signify end of data transfer
+  vspi->endTransaction();
+  delayMicroseconds(300);
+  return v;
+}
+
+void setup() {
   Serial.begin(115200);
+  xMutex = xSemaphoreCreateMutex();
+  M5.begin();
+  delay(1000);
+  M5.Lcd.println("Hello World M5Stack-MusicIF!");
+  Serial.println("Hello World M5Stack-MusicIF!");
+
+  // initialise vspi with default pins
   digitalWrite(5, HIGH);
   pinMode(5, OUTPUT);
-  //initialise vspi with default pins
-  //SCLK = 18, MISO = 19, MOSI = 23, SS = 5
+  // SCLK = 18, MISO = 19, MOSI = 23, SS = 5
   vspi = new SPIClass(VSPI);
   vspi->begin();
 
-  M5.begin();
-  M5.Lcd.print("Hello World M5Stack-MusicIF");
+  Wire.begin();
+  delay(1000);
+  i2cWrite(0x00, 0x00);
+  delay(10);
+  i2cWrite(0x01, 0x08);
+  i2cWrite(0x05, 0x21);
+  i2cWrite(0x06, 0x09);
+  delay(10);
+  i2cWrite(0x01, 0x0c);
+  delay(10);
 
-  params.attack = 5000. / SampleRate;
-  params.decay = 1000. / SampleRate;
-  params.sustainLevel = 0.7;
-  params.sustainRate = 10.0;
-  params.sustain = 100. / SampleRate;
-  params.release = 500. / SampleRate;
+  i2cWrite(0x00, 0x64);
+  i2cWrite(0x01, 0x30);
+  i2cWrite(0x04, 0x34);
+  i2cWrite(0x12, 0x00);
+  i2cWrite(0x13, 0x0c);
+  i2cWrite(0x14, 0x0c);
+  i2cWrite(0x1d, 0x03);
 
-  timer = timerBegin(0, 80, true);
-  timerAttachInterrupt(timer, &onTimer, true);
-  timerAlarmWrite(timer, 10000, true);
-  timerAlarmEnable(timer);
+  // for BEEP
+  i2cWrite(0x16, 0x05);
+  i2cWrite(0x17, 0x05);
+  i2cWrite(0x18, 0x01);  // 2 times
+  i2cWrite(0x19, 0x88);
+
+  params.attack = 10. / SampleRate;
+  params.decay = 5. / SampleRate;
+  params.sustainLevel = 0.9;
+  params.sustainRate = 9.0;
+  params.sustain = 0.44 / SampleRate;
+  params.release = 2. / SampleRate;
+  params.form = form;
+
+  xTaskCreatePinnedToCore(audioTask, "audioTask", 2048, NULL, 25, NULL, 0);
 }
 
-float env(struct Note *n)
-{
-  if (n->gain == 0.0 && n->vel == 0)
-  {
+float envelope(struct Note *n) {
+  if (n->gain == 0.0 && n->vel == 0) {
     n->top = false;
+    n->phase = 0;
     return 0.0;
   }
-  if (n->vel > 0)
-  {
-    float topLevel = float(n->vel) / 127.0;
-    if (!n->top)
-    {
+  float topLevel = float(n->vel) / 127.0;
+  if (n->on) {
+    if (!n->top) {
       n->gain += params.attack;
-      if (n->gain > topLevel)
-      {
+      if (n->gain > topLevel) {
         n->top = true;
         n->gain = topLevel;
       }
-    }
-    else
-    {
-      if (n->gain > params.sustainLevel * topLevel)
-      {
+    } else {
+      if (n->gain > params.sustainLevel * topLevel) {
         n->gain -= params.decay;
-      }
-      else
-      {
+      } else {
         n->gain -= params.sustain;
       }
-      if (n->gain < 0.0)
-      {
+      if (n->gain < 0.0) {
         n->gain = 0.0;
+        n->vel = 0.0;
+        n->phase = 0;
       }
     }
-  }
-  else
-  {
-    float release = params.release / (1.0 + float(control[64]) * params.sustainRate / 127.0);
+  } else {
     n->top = false;
-    n->gain -= release;
-    if (n->gain < 0.0)
-    {
+    if (n->gain > params.sustainLevel * topLevel) {
+      n->gain -= params.decay;
+    } else {
+      float release = params.release /
+                      (1.0 + float(control[64]) * params.sustainRate / 127.0);
+      n->gain -= release;
+    }
+    if (n->gain < 0.0) {
       n->gain = 0.0;
+      n->vel = 0.0;
+      n->phase = 0;
     }
   }
   return n->gain;
 }
 
-uint8_t read()
-{
-  uint8_t v;
-  vspi->beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE1));
-  digitalWrite(5, LOW); //pull SS slow to prep other end for transfer
-  v = vspi->transfer(0xFE);
-  digitalWrite(5, HIGH); //pull ss high to signify end of data transfer
-  vspi->endTransaction();
-  delayMicroseconds(250);
+float operate(struct Note *n, float f) {
+  if (n->gain == 0.0 && n->vel == 0) {
+    return 0.0;
+  }
+  int i = int(float(formLen) * n->phase);
+  float v = n->gain * (
+    form[i % formLen] * (1 - n->phase) +
+    form[(i + 1) % formLen] * (n->phase)
+  );
+  n->phase += f / SampleRate;
+  n->phase = n->phase - float(int(n->phase));
+  if (v > 1.0) {
+    return 1.0;
+  }
+  if (v < -1.0) {
+    return -1.0;
+  }
   return v;
 }
 
-void loop()
-{
-  //portENTER_CRITICAL(&timerMux);
-  for (int i = 0; i < 128; i++)
-  {
-    int h = int(gains[i] * 128);
-    M5.Lcd.fillRect(i * 2, 10, 2, 128 - h, TFT_BLACK);
-    M5.Lcd.fillRect(i * 2, 138 - h, 2, h, TFT_WHITE);
+void audioTask(void *pvParameters) {
+  float total;
+  size_t wrote;
+
+  i2s_config_t i2s_config_dac = {
+      .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
+      .sample_rate = SampleRate,
+      .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+      .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
+      .communication_format =
+          (i2s_comm_format_t)(I2S_COMM_FORMAT_I2S | I2S_COMM_FORMAT_I2S_LSB),
+      .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,  // lowest interrupt priority
+      .dma_buf_count = DMABufCount,
+      .dma_buf_len = DMABufLength,
+      .use_apll = true,  // Use audio PLL
+      .tx_desc_auto_clear = false,
+      .fixed_mclk = SampleRate * 16 * 16,
+  };
+  // i2s_config_dac.fixed_mclk = 11289600;
+  i2s_driver_install((i2s_port_t)I2S_NUM_0, &i2s_config_dac, 0, NULL);
+  i2s_pin_config_t pins = {.bck_io_num = GPIO_NUM_12,
+                           .ws_io_num = GPIO_NUM_13,
+                           .data_out_num = GPIO_NUM_15,
+                           .data_in_num = I2S_PIN_NO_CHANGE};
+  i2s_set_pin((i2s_port_t)I2S_NUM_0, &pins);
+  i2s_zero_dma_buffer((i2s_port_t)I2S_NUM_0);
+  PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO0_U, FUNC_GPIO0_CLK_OUT1);
+  WRITE_PERI_REG(PIN_CTRL, READ_PERI_REG(PIN_CTRL) & 0xFFFFFFF0);
+
+  for (;;) {
+#ifdef DMAWriteLength
+    for (int j = 0; j < DMAWriteLength; j++) {
+#endif
+      total = 0.0;
+      xSemaphoreTake(xMutex, portMAX_DELAY);
+      for (int i = BeginNote; i < EndNote; i++) {
+        envelope(&notes[i]);
+        float n = toneMap[i];
+        float m = toneMap[i + 2];
+        float p = pitch;
+        if (pitch < 0) {
+          p = -1 * pitch;
+          int i2 = i - 2;
+          if (i2 < 0) {
+            i2 = 0;
+          }
+          m = toneMap[i2];
+        }
+        float f = n * (1 - p) + m * (p);
+        total += operate(&notes[i], f);
+      }
+      if (total > 1.0) {
+        total = 1.0;
+      }
+      if (total < -1.0) {
+        total = -1.0;
+      }
+      xSemaphoreGive(xMutex);
+      total *= MasterGain;
+      int16_t data[2] = {int16_t(32000 * total), int16_t(32000 * total)};
+      // i2s_write((i2s_port_t)I2S_NUM_0, data, 4, &wrote, portMAX_DELAY);
+      i2s_write((i2s_port_t)I2S_NUM_0, data, 4, &wrote, 100);
+#ifdef DMAWriteLength
+    }
+    vTaskDelay(1);
+#endif
   }
-  //portEXIT_CRITICAL(&timerMux);
-  uint8_t note, num;
-  uint8_t first = read();
-  if (first & 0x80 == 0)
-  {
+}
+
+void commTask() {
+  uint8_t note, vel, num, val;
+  uint8_t first = spiRead();
+  if (first & 0x80 == 0) {
     return;
   }
   int ch = first & 0xf;
   int cmd = first >> 4;
-  switch (cmd)
-  {
-  case 0x9: // note-on
-    note = read();
-    if (note & 0x80)
-    {
+  switch (cmd) {
+    case 0x9:  // note-on
+      note = spiRead();
+      if (note & 0x80) {
+        return;
+      }
+      vel = spiRead() & 0x7f;
+      xSemaphoreTake(xMutex, portMAX_DELAY);
+      notes[note].vel = vel;
+      notes[note].on = true;
+      xSemaphoreGive(xMutex);
+      break;
+    case 0x8:  // note-off
+      note = spiRead();
+      if (note & 0x80) {
+        return;
+      }
+      vel = spiRead() & 0x7f;
+      xSemaphoreTake(xMutex, portMAX_DELAY);
+      notes[note].vel = vel;
+      notes[note].on = false;
+      xSemaphoreGive(xMutex);
+      break;
+    case 0xb:  // controll-change
+      num = spiRead();
+      if (num & 0x80) {
+        return;
+      }
+      val = spiRead() & 0x7f;
+      xSemaphoreTake(xMutex, portMAX_DELAY);
+      control[num] = val;
+      xSemaphoreGive(xMutex);
+      M5.Lcd.setCursor(0, 160);
+      M5.Lcd.printf("ctrl: %03d, %03d \n", num, val);
+      break;
+    case 0xe:  // pitch-bend
+      num = spiRead();
+      val = spiRead() & 0x7f;
+      float p;
+      p = (float(val) - 64.0) / 63.0;
+      if (p < -1.0) {
+        p = -1.0;
+      }
+      xSemaphoreTake(xMutex, portMAX_DELAY);
+      pitch = p;
+      xSemaphoreGive(xMutex);
+      M5.Lcd.setCursor(0, 160);
+      M5.Lcd.printf("pitch: %03d, %+03d \n", num, val);
+    default:
       return;
-    }
-    notes[note].vel = read() & 0x7f;
-    break;
-  case 0x8: // note-off
-    note = read();
-    if (note & 0x80)
-    {
-      return;
-    }
-    notes[note].vel = 0;
-    read();
-    break;
-  case 0xb: // controll-change
-    num = read();
-    if (num & 0x80)
-    {
-      return;
-    }
-    control[num] = read() & 0x7f;
-    M5.Lcd.setCursor(0, 160);
-    M5.Lcd.printf("ctrl: %03d, %03d\n", num, control[num]);
-    break;
-  case 0xe: // pitch-bend
-    num = read();
-    pitch = read() & 0x7f;
-  default:
-    return;
   }
-  //M5.update();
+}
+
+void loop() {
+  M5.update();
+  commTask();
+  if (M5.BtnA.wasReleased()) {
+    xSemaphoreTake(xMutex, portMAX_DELAY);
+    memset(&notes[0], 0, sizeof(notes));
+    xSemaphoreGive(xMutex);
+  }
+  if (BarView) {
+    for (int i = BeginNote; i < EndNote; i++) {
+      xSemaphoreTake(xMutex, portMAX_DELAY);
+      int h = int(notes[i].gain * 128);
+      xSemaphoreGive(xMutex);
+      M5.Lcd.fillRect(i * 2, 10, 2, 128 - h, TFT_BLACK);
+      M5.Lcd.fillRect(i * 2, 138 - h, 2, h, TFT_WHITE);
+    }
+  }
 }
