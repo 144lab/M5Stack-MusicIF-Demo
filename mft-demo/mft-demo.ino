@@ -14,8 +14,15 @@ SPIClass *vspi = NULL;
 #define SampleRate 16000
 #define DMABufCount 16
 #define DMABufLength 64
-#define MasterGain 0.1
 #define BarView true
+
+const uint8_t gainList[] = {
+    0,  6,  12, 18, 24,  30,  36,  42,  48,  54,  60,  66,  72,
+    78, 84, 90, 96, 102, 108, 114, 120, 126, 132, 138, 144,
+};
+const int gainCount = sizeof(gainList) / sizeof(uint8_t);
+
+int MasterVolume = 20;
 const uint16_t I2CSlaveAddr = 0x12;
 
 const float form1[] = {
@@ -347,6 +354,14 @@ uint8_t spiRead() {
   return v;
 }
 
+void setMasterVolume(int vol) {
+  int index = gainCount - 1 - MasterVolume;
+  i2cWrite(0x13, gainList[index]);
+  i2cWrite(0x14, gainList[index]);
+  M5.Lcd.setCursor(0, 180);
+  M5.Lcd.printf("master volume: %2d\n", MasterVolume);
+}
+
 void setup() {
   Serial.begin(115200);
   xMutex = xSemaphoreCreateMutex();
@@ -377,8 +392,6 @@ void setup() {
   i2cWrite(0x01, 0x30);
   i2cWrite(0x04, 0x34);
   i2cWrite(0x12, 0x00);
-  i2cWrite(0x13, 0x0c);
-  i2cWrite(0x14, 0x0c);
   i2cWrite(0x1d, 0x03);
 
   // for BEEP
@@ -386,6 +399,9 @@ void setup() {
   i2cWrite(0x17, 0x05);
   i2cWrite(0x18, 0x01); // 2 times
   i2cWrite(0x19, 0x88);
+
+  // Master Gain
+  setMasterVolume(MasterVolume);
 
   params = &paramsList[paramsIndex];
   M5.Lcd.setCursor(0, 170);
@@ -513,8 +529,7 @@ void audioTask(void *pvParameters) {
       total = -1.0;
     }
     xSemaphoreGive(xMutex);
-    total *= MasterGain;
-    int16_t data[2] = {int16_t(32000 * total), int16_t(32000 * total)};
+    int16_t data[2] = {int16_t(16000 * total), int16_t(16000 * total)};
     i2s_write((i2s_port_t)I2S_NUM_0, data, 4, &wrote, 100);
   }
 }
@@ -578,7 +593,11 @@ void loop() {
   M5.update();
   commTask();
   if (M5.BtnA.wasReleased()) {
-    //
+    MasterVolume--;
+    if (MasterVolume < 0) {
+      MasterVolume = 0;
+    }
+    setMasterVolume(MasterVolume);
   }
   if (M5.BtnB.wasReleased()) {
     xSemaphoreTake(xMutex, portMAX_DELAY);
@@ -589,7 +608,11 @@ void loop() {
     M5.Lcd.printf("wave form: %d\n", paramsIndex);
   }
   if (M5.BtnC.wasReleased()) {
-    //
+    MasterVolume++;
+    if (MasterVolume >= gainCount) {
+      MasterVolume = gainCount - 1;
+    }
+    setMasterVolume(MasterVolume);
   }
   if (BarView) {
     for (int i = BeginNote; i < EndNote; i++) {
