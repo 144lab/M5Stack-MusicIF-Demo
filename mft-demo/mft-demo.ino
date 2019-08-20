@@ -3,23 +3,22 @@
 #include <SPI.h>
 #include <Wire.h>
 #include <math.h>
+
 #include "driver/i2s.h"
 
 SPIClass *vspi = NULL;
 
-//#define BeginNote 1
-//#define EndNote 128
-#define BeginNote (36)
-#define EndNote (85)
+#define MaxPolyphony 8
+#define BeginNote 1
+#define EndNote 128
 #define SampleRate 16000
 #define DMABufCount 16
 #define DMABufLength 64
-//#define DMAWriteLength 64
 #define MasterGain 0.1
 #define BarView true
 const uint16_t I2CSlaveAddr = 0x12;
 
-const float form[] = {
+const float form1[] = {
     0.0,
     0.049067674327418015,
     0.0980171403295606,
@@ -149,7 +148,28 @@ const float form[] = {
     -0.09801714032956052,
     -0.0490676743274180,
 };
-const int formLen = sizeof(form) / sizeof(float);
+
+const float form2[] = {
+    0.02228,  0.02765,  0.02053,  -0.01519, -0.06787, -0.06072, -0.04724,
+    -0.05765, -0.01910, 0.03289,  0.08273,  0.13940,  0.11706,  0.06689,
+    0.03338,  -0.05285, -0.13366, -0.16491, -0.20506, -0.20248, -0.16497,
+    -0.13637, -0.04612, 0.05436,  0.10167,  0.11837,  0.09184,  0.03813,
+    -0.03075, -0.12342, -0.19155, -0.24263, -0.33331, -0.35835, -0.29186,
+    -0.18098, -0.04185, 0.05620,  0.10544,  0.15068,  0.16912,  0.14566,
+    0.10187,  0.02552,  -0.05956, -0.14947, -0.19638, -0.19449, -0.15328,
+    -0.11134, -0.10183, -0.06497, -0.00833, 0.04250,  0.09087,  0.12332,
+    0.14033,  0.14816,  0.14266,  0.14905,  0.18481,  0.20491,  0.19229,
+    0.17313,  0.14034,  0.12052,  0.12403,  0.12324,  0.10882,  0.11918,
+    0.12034,  0.13370,  0.17856,  0.22018,  0.25724,  0.26085,  0.24341,
+    0.22923,  0.21964,  0.18427,  0.15720,  0.13564,  0.08770,  0.05586,
+    0.06215,  0.11416,  0.18126,  0.17765,  0.13364,  0.10718,  0.09003,
+    0.07549,  0.04007,  0.02016,  0.03321,  0.02301,  0.04958,  0.09636,
+    0.13982,  0.21460,  0.21760,  0.14192,  0.01850,  -0.13288, -0.29390,
+    -0.50247, -0.67149, -0.70905, -0.70960, -0.62262, -0.41466, -0.19885,
+    0.04470,  0.26506,  0.36032,  0.39179,  0.38315,  0.24268,  0.06933,
+    -0.06901, -0.24582, -0.34780, -0.35623, -0.37080, -0.29164, -0.17080,
+    -0.11854, -0.04797,
+};
 
 const float toneMap[] = {
     16.351597831287414, 17.323914436054505,
@@ -233,9 +253,11 @@ struct Params {
   float sustain;
   float release;
   const float *form;
+  int formLen;
 };
 
 struct Note {
+  uint8_t num;
   uint8_t vel;
   bool on;
   bool top;
@@ -243,10 +265,69 @@ struct Note {
   float phase;
 };
 
-Params params;
-struct Note notes[128] = {};
-
 SemaphoreHandle_t xMutex = NULL;
+
+Params *params;
+
+int paramsIndex = 0;
+Params paramsList[] = {
+    {
+        .attack = 10. / SampleRate,
+        .decay = 5. / SampleRate,
+        .sustainLevel = 0.9,
+        .sustainRate = 9.0,
+        .sustain = 0.44 / SampleRate,
+        .release = 2. / SampleRate,
+        .form = form1,
+        .formLen = sizeof(form1) / sizeof(float),
+    },
+    {
+        .attack = 10. / SampleRate,
+        .decay = 5. / SampleRate,
+        .sustainLevel = 0.9,
+        .sustainRate = 9.0,
+        .sustain = 0.44 / SampleRate,
+        .release = 2. / SampleRate,
+        .form = form2,
+        .formLen = sizeof(form2) / sizeof(float),
+    },
+};
+
+struct Note notes[MaxPolyphony] = {};
+
+void NoteOn(uint8_t num, uint8_t vel) {
+  float minGain = 1.0;
+  int index = 0;
+  xSemaphoreTake(xMutex, portMAX_DELAY);
+  for (int i = 0; i < MaxPolyphony; i++) {
+    if (notes[i].num == num) {
+      index = i;
+      break;
+    }
+    if (minGain > notes[i].gain) {
+      minGain = notes[i].gain;
+      index = i;
+      notes[index].phase = 0.0;
+    }
+  }
+  notes[index].num = num;
+  notes[index].vel = vel;
+  notes[index].on = true;
+  xSemaphoreGive(xMutex);
+}
+
+void NoteOff(uint8_t num, uint8_t vel) {
+  int index = -1;
+  xSemaphoreTake(xMutex, portMAX_DELAY);
+  for (int i = 0; i < MaxPolyphony; i++) {
+    if (notes[i].num == num) {
+      index = i;
+      break;
+    }
+  }
+  notes[index].on = false;
+  xSemaphoreGive(xMutex);
+}
 
 uint8_t i2cWrite(uint8_t addr, uint8_t data) {
   Wire.beginTransmission(I2CSlaveAddr);
@@ -258,9 +339,9 @@ uint8_t i2cWrite(uint8_t addr, uint8_t data) {
 uint8_t spiRead() {
   uint8_t v;
   vspi->beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE1));
-  digitalWrite(5, LOW);  // pull SS slow to prep other end for transfer
+  digitalWrite(5, LOW); // pull SS slow to prep other end for transfer
   v = vspi->transfer(0xFE);
-  digitalWrite(5, HIGH);  // pull ss high to signify end of data transfer
+  digitalWrite(5, HIGH); // pull ss high to signify end of data transfer
   vspi->endTransaction();
   delayMicroseconds(300);
   return v;
@@ -303,16 +384,12 @@ void setup() {
   // for BEEP
   i2cWrite(0x16, 0x05);
   i2cWrite(0x17, 0x05);
-  i2cWrite(0x18, 0x01);  // 2 times
+  i2cWrite(0x18, 0x01); // 2 times
   i2cWrite(0x19, 0x88);
 
-  params.attack = 10. / SampleRate;
-  params.decay = 5. / SampleRate;
-  params.sustainLevel = 0.9;
-  params.sustainRate = 9.0;
-  params.sustain = 0.44 / SampleRate;
-  params.release = 2. / SampleRate;
-  params.form = form;
+  params = &paramsList[paramsIndex];
+  M5.Lcd.setCursor(0, 170);
+  M5.Lcd.printf("wave form: %d\n", paramsIndex);
 
   xTaskCreatePinnedToCore(audioTask, "audioTask", 2048, NULL, 25, NULL, 0);
 }
@@ -326,36 +403,38 @@ float envelope(struct Note *n) {
   float topLevel = float(n->vel) / 127.0;
   if (n->on) {
     if (!n->top) {
-      n->gain += params.attack;
+      n->gain += params->attack;
       if (n->gain > topLevel) {
         n->top = true;
         n->gain = topLevel;
       }
     } else {
-      if (n->gain > params.sustainLevel * topLevel) {
-        n->gain -= params.decay;
+      if (n->gain > params->sustainLevel * topLevel) {
+        n->gain -= params->decay;
       } else {
-        n->gain -= params.sustain;
+        n->gain -= params->sustain;
       }
       if (n->gain < 0.0) {
         n->gain = 0.0;
         n->vel = 0.0;
         n->phase = 0;
+        n->num = 0;
       }
     }
   } else {
     n->top = false;
-    if (n->gain > params.sustainLevel * topLevel) {
-      n->gain -= params.decay;
+    if (n->gain > params->sustainLevel * topLevel) {
+      n->gain -= params->decay;
     } else {
-      float release = params.release /
-                      (1.0 + float(control[64]) * params.sustainRate / 127.0);
+      float release = params->release /
+                      (1.0 + float(control[64]) * params->sustainRate / 127.0);
       n->gain -= release;
     }
     if (n->gain < 0.0) {
       n->gain = 0.0;
       n->vel = 0.0;
       n->phase = 0;
+      n->num = 0;
     }
   }
   return n->gain;
@@ -365,11 +444,9 @@ float operate(struct Note *n, float f) {
   if (n->gain == 0.0 && n->vel == 0) {
     return 0.0;
   }
-  int i = int(float(formLen) * n->phase);
-  float v = n->gain * (
-    form[i % formLen] * (1 - n->phase) +
-    form[(i + 1) % formLen] * (n->phase)
-  );
+  int i = int(float(params->formLen) * n->phase);
+  float v = n->gain * (params->form[i % params->formLen] * (1 - n->phase) +
+                       params->form[(i + 1) % params->formLen] * (n->phase));
   n->phase += f / SampleRate;
   n->phase = n->phase - float(int(n->phase));
   if (v > 1.0) {
@@ -392,11 +469,11 @@ void audioTask(void *pvParameters) {
       .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
       .communication_format =
           (i2s_comm_format_t)(I2S_COMM_FORMAT_I2S | I2S_COMM_FORMAT_I2S_LSB),
-      .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,  // lowest interrupt priority
+      .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1, // lowest interrupt priority
       .dma_buf_count = DMABufCount,
       .dma_buf_len = DMABufLength,
-      .use_apll = true,  // Use audio PLL
-      .tx_desc_auto_clear = false,
+      .use_apll = true, // Use audio PLL
+      .tx_desc_auto_clear = true,
       .fixed_mclk = SampleRate * 16 * 16,
   };
   // i2s_config_dac.fixed_mclk = 11289600;
@@ -411,42 +488,34 @@ void audioTask(void *pvParameters) {
   WRITE_PERI_REG(PIN_CTRL, READ_PERI_REG(PIN_CTRL) & 0xFFFFFFF0);
 
   for (;;) {
-#ifdef DMAWriteLength
-    for (int j = 0; j < DMAWriteLength; j++) {
-#endif
-      total = 0.0;
-      xSemaphoreTake(xMutex, portMAX_DELAY);
-      for (int i = BeginNote; i < EndNote; i++) {
-        envelope(&notes[i]);
-        float n = toneMap[i];
-        float m = toneMap[i + 2];
-        float p = pitch;
-        if (pitch < 0) {
-          p = -1 * pitch;
-          int i2 = i - 2;
-          if (i2 < 0) {
-            i2 = 0;
-          }
-          m = toneMap[i2];
+    total = 0.0;
+    xSemaphoreTake(xMutex, portMAX_DELAY);
+    for (int i = 0; i < MaxPolyphony; i++) {
+      envelope(&notes[i]);
+      float n = toneMap[notes[i].num];
+      float m = toneMap[notes[i].num + 2];
+      float p = pitch;
+      if (pitch < 0) {
+        p = -1 * pitch;
+        int i2 = notes[i].num - 2;
+        if (i2 < 0) {
+          i2 = 0;
         }
-        float f = n * (1 - p) + m * (p);
-        total += operate(&notes[i], f);
+        m = toneMap[i2];
       }
-      if (total > 1.0) {
-        total = 1.0;
-      }
-      if (total < -1.0) {
-        total = -1.0;
-      }
-      xSemaphoreGive(xMutex);
-      total *= MasterGain;
-      int16_t data[2] = {int16_t(32000 * total), int16_t(32000 * total)};
-      // i2s_write((i2s_port_t)I2S_NUM_0, data, 4, &wrote, portMAX_DELAY);
-      i2s_write((i2s_port_t)I2S_NUM_0, data, 4, &wrote, 100);
-#ifdef DMAWriteLength
+      float f = n * (1 - p) + m * (p);
+      total += operate(&notes[i], f);
     }
-    vTaskDelay(1);
-#endif
+    if (total > 1.0) {
+      total = 1.0;
+    }
+    if (total < -1.0) {
+      total = -1.0;
+    }
+    xSemaphoreGive(xMutex);
+    total *= MasterGain;
+    int16_t data[2] = {int16_t(32000 * total), int16_t(32000 * total)};
+    i2s_write((i2s_port_t)I2S_NUM_0, data, 4, &wrote, 100);
   }
 }
 
@@ -459,55 +528,49 @@ void commTask() {
   int ch = first & 0xf;
   int cmd = first >> 4;
   switch (cmd) {
-    case 0x9:  // note-on
-      note = spiRead();
-      if (note & 0x80) {
-        return;
-      }
-      vel = spiRead() & 0x7f;
-      xSemaphoreTake(xMutex, portMAX_DELAY);
-      notes[note].vel = vel;
-      notes[note].on = true;
-      xSemaphoreGive(xMutex);
-      break;
-    case 0x8:  // note-off
-      note = spiRead();
-      if (note & 0x80) {
-        return;
-      }
-      vel = spiRead() & 0x7f;
-      xSemaphoreTake(xMutex, portMAX_DELAY);
-      notes[note].vel = vel;
-      notes[note].on = false;
-      xSemaphoreGive(xMutex);
-      break;
-    case 0xb:  // controll-change
-      num = spiRead();
-      if (num & 0x80) {
-        return;
-      }
-      val = spiRead() & 0x7f;
-      xSemaphoreTake(xMutex, portMAX_DELAY);
-      control[num] = val;
-      xSemaphoreGive(xMutex);
-      M5.Lcd.setCursor(0, 160);
-      M5.Lcd.printf("ctrl: %03d, %03d \n", num, val);
-      break;
-    case 0xe:  // pitch-bend
-      num = spiRead();
-      val = spiRead() & 0x7f;
-      float p;
-      p = (float(val) - 64.0) / 63.0;
-      if (p < -1.0) {
-        p = -1.0;
-      }
-      xSemaphoreTake(xMutex, portMAX_DELAY);
-      pitch = p;
-      xSemaphoreGive(xMutex);
-      M5.Lcd.setCursor(0, 160);
-      M5.Lcd.printf("pitch: %03d, %+03d \n", num, val);
-    default:
+  case 0x9: // note-on
+    note = spiRead();
+    if (note & 0x80) {
       return;
+    }
+    vel = spiRead() & 0x7f;
+    NoteOn(note, vel);
+    break;
+  case 0x8: // note-off
+    note = spiRead();
+    if (note & 0x80) {
+      return;
+    }
+    vel = spiRead() & 0x7f;
+    NoteOff(note, vel);
+    break;
+  case 0xb: // controll-change
+    num = spiRead();
+    if (num & 0x80) {
+      return;
+    }
+    val = spiRead() & 0x7f;
+    xSemaphoreTake(xMutex, portMAX_DELAY);
+    control[num] = val;
+    xSemaphoreGive(xMutex);
+    M5.Lcd.setCursor(0, 160);
+    M5.Lcd.printf("ctrl: %03d, %03d \n", num, val);
+    break;
+  case 0xe: // pitch-bend
+    num = spiRead();
+    val = spiRead() & 0x7f;
+    float p;
+    p = (float(val) - 64.0) / 63.0;
+    if (p < -1.0) {
+      p = -1.0;
+    }
+    xSemaphoreTake(xMutex, portMAX_DELAY);
+    pitch = p;
+    xSemaphoreGive(xMutex);
+    M5.Lcd.setCursor(0, 160);
+    M5.Lcd.printf("pitch: %03d, %+03d \n", num, val);
+  default:
+    return;
   }
 }
 
@@ -515,14 +578,28 @@ void loop() {
   M5.update();
   commTask();
   if (M5.BtnA.wasReleased()) {
+    //
+  }
+  if (M5.BtnB.wasReleased()) {
     xSemaphoreTake(xMutex, portMAX_DELAY);
-    memset(&notes[0], 0, sizeof(notes));
+    paramsIndex = (paramsIndex + 1) % (sizeof(paramsList) / sizeof(Params));
+    params = &paramsList[paramsIndex];
     xSemaphoreGive(xMutex);
+    M5.Lcd.setCursor(0, 170);
+    M5.Lcd.printf("wave form: %d\n", paramsIndex);
+  }
+  if (M5.BtnC.wasReleased()) {
+    //
   }
   if (BarView) {
     for (int i = BeginNote; i < EndNote; i++) {
+      int h = 0;
       xSemaphoreTake(xMutex, portMAX_DELAY);
-      int h = int(notes[i].gain * 128);
+      for (int j = 0; j < MaxPolyphony; j++) {
+        if (notes[j].num == i) {
+          h = int(notes[j].gain * 128);
+        }
+      }
       xSemaphoreGive(xMutex);
       M5.Lcd.fillRect(i * 2, 10, 2, 128 - h, TFT_BLACK);
       M5.Lcd.fillRect(i * 2, 138 - h, 2, h, TFT_WHITE);
