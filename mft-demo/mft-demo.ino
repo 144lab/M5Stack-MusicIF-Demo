@@ -11,7 +11,7 @@ SPIClass *vspi = NULL;
 #define MaxPolyphony 8
 #define BeginNote 1
 #define EndNote 128
-#define SampleRate 16000
+#define SampleRate 22050
 #define DMABufCount 16
 #define DMABufLength 64
 #define BarView true
