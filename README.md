@@ -1,6 +1,6 @@
-# M5Stack-MusicIF Demo
+# M5Stack-MusicIF Synthesizer Demo
 
 # folder
 
-- mft-demo/ : M5Stack-Core用arduinoコード
-- stm/ : MusicIF側ファームウェア
+- synth-demo/ : M5Stack-Core用arduinoコード
+- stm/ : MusicIF側ファームウェア(予定)
