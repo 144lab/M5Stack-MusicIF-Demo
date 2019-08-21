@@ -261,6 +261,8 @@ struct Params {
   float release;
   const float *form;
   int formLen;
+  float formGain;
+  float formRate;
 };
 
 struct Note {
@@ -287,16 +289,20 @@ Params paramsList[] = {
         .release = 2. / SampleRate,
         .form = form1,
         .formLen = sizeof(form1) / sizeof(float),
+        .formGain = 0.5,
+        .formRate = 1.0,
     },
     {
-        .attack = 10. / SampleRate,
+        .attack = 5. / SampleRate,
         .decay = 5. / SampleRate,
-        .sustainLevel = 0.9,
+        .sustainLevel = 0.95,
         .sustainRate = 9.0,
-        .sustain = 0.44 / SampleRate,
+        .sustain = 0.04 / SampleRate,
         .release = 2. / SampleRate,
         .form = form2,
         .formLen = sizeof(form2) / sizeof(float),
+        .formGain = 0.7,
+        .formRate = 0.3,
     },
 };
 
@@ -305,21 +311,25 @@ struct Note notes[MaxPolyphony] = {};
 void NoteOn(uint8_t num, uint8_t vel) {
   float minGain = 1.0;
   int index = 0;
+  bool phaseReset = true;
   xSemaphoreTake(xMutex, portMAX_DELAY);
   for (int i = 0; i < MaxPolyphony; i++) {
     if (notes[i].num == num) {
       index = i;
+      phaseReset = false;
       break;
     }
     if (minGain > notes[i].gain) {
       minGain = notes[i].gain;
       index = i;
-      notes[index].phase = 0.0;
     }
   }
   notes[index].num = num;
   notes[index].vel = vel;
   notes[index].on = true;
+  if (phaseReset) {
+    notes[index].phase = 0.0;
+  }
   xSemaphoreGive(xMutex);
 }
 
@@ -461,9 +471,11 @@ float operate(struct Note *n, float f) {
     return 0.0;
   }
   int i = int(float(params->formLen) * n->phase);
-  float v = n->gain * (params->form[i % params->formLen] * (1 - n->phase) +
-                       params->form[(i + 1) % params->formLen] * (n->phase));
-  n->phase += f / SampleRate;
+  float p = n->phase * float(params->formLen) - float(i);
+  float v = n->gain * params->formGain *
+            (params->form[i % params->formLen] * (1 - p) +
+             params->form[(i + 1) % params->formLen] * p);
+  n->phase += f / SampleRate * params->formRate;
   n->phase = n->phase - float(int(n->phase));
   if (v > 1.0) {
     return 1.0;
@@ -529,7 +541,7 @@ void audioTask(void *pvParameters) {
       total = -1.0;
     }
     xSemaphoreGive(xMutex);
-    int16_t data[2] = {int16_t(16000 * total), int16_t(16000 * total)};
+    int16_t data[2] = {int16_t(32767 * total), int16_t(32767 * total)};
     i2s_write((i2s_port_t)I2S_NUM_0, data, 4, &wrote, 100);
   }
 }
