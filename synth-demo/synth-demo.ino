@@ -353,15 +353,36 @@ uint8_t i2cWrite(uint8_t addr, uint8_t data) {
   return Wire.endTransmission();
 }
 
-uint8_t spiRead() {
+bool spiRead2(uint8_t res[3]) {
+  static const SPISettings settings = SPISettings(1000000, MSBFIRST, SPI_MODE1);
+  static uint8_t last = 0;
+  static int stock = 0;
+  static uint8_t data[3];
   uint8_t v;
-  vspi->beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE1));
+  vspi->beginTransaction(settings);
   digitalWrite(5, LOW); // pull SS slow to prep other end for transfer
   v = vspi->transfer(0xFE);
   digitalWrite(5, HIGH); // pull ss high to signify end of data transfer
   vspi->endTransaction();
-  delayMicroseconds(300);
-  return v;
+  if (v == last) {
+    if (data[1] != 0x40) {
+      return false;
+    }
+  }
+  last = v;
+  if (v & 0x80) {
+    stock = 0;
+  }
+  data[stock] = v;
+  stock++;
+  if (stock == 3) {
+    res[0] = data[0];
+    res[1] = data[1];
+    res[2] = data[2];
+    data[1] = 0;
+    return true;
+  }
+  return false;
 }
 
 void setMasterVolume(int vol) {
@@ -546,46 +567,25 @@ void audioTask(void *pvParameters) {
   }
 }
 
-void commTask() {
+void communicate(uint8_t data[3]) {
   uint8_t note, vel, num, val;
-  uint8_t first = spiRead();
-  if (first & 0x80 == 0) {
-    return;
-  }
-  int ch = first & 0xf;
-  int cmd = first >> 4;
-  switch (cmd) {
-  case 0x9: // note-on
-    note = spiRead();
-    if (note & 0x80) {
-      return;
-    }
-    vel = spiRead() & 0x7f;
-    NoteOn(note, vel);
+  switch (data[0]) {
+  case 0x90: // note-on
+    NoteOn(data[1], data[2]);
     break;
-  case 0x8: // note-off
-    note = spiRead();
-    if (note & 0x80) {
-      return;
-    }
-    vel = spiRead() & 0x7f;
-    NoteOff(note, vel);
+  case 0x80: // note-off
+    NoteOff(data[1], data[2]);
     break;
-  case 0xb: // controll-change
-    num = spiRead();
-    if (num & 0x80) {
-      return;
-    }
-    val = spiRead() & 0x7f;
+  case 0xb0: // controll-change
     xSemaphoreTake(xMutex, portMAX_DELAY);
-    control[num] = val;
+    control[data[1]] = data[2];
     xSemaphoreGive(xMutex);
     M5.Lcd.setCursor(0, 160);
     M5.Lcd.printf("ctrl: %03d, %03d \n", num, val);
     break;
-  case 0xe: // pitch-bend
-    num = spiRead();
-    val = spiRead() & 0x7f;
+  case 0xe0: // pitch-bend
+    num = data[1];
+    val = data[2] & 0x7f;
     float p;
     p = (float(val) - 64.0) / 63.0;
     if (p < -1.0) {
@@ -596,14 +596,29 @@ void commTask() {
     xSemaphoreGive(xMutex);
     M5.Lcd.setCursor(0, 160);
     M5.Lcd.printf("pitch: %03d, %+03d \n", num, val);
+    break;
   default:
     return;
   }
 }
 
 void loop() {
+  for (int i = 0; i < 6; i++) {
+    for (int j = 0; j < 3; j++) {
+      uint8_t data[3];
+      if (!spiRead2(data)) {
+        ets_delay_us(200);
+        continue;
+      }
+      M5.Lcd.setCursor(0, 190);
+      M5.Lcd.printf("MIDI input: 0x%02x, 0x%02x, 0x%02x \n", data[0], data[1],
+                    data[2]);
+      communicate(data);
+    }
+    const TickType_t d = 1 / portTICK_PERIOD_MS;
+    vTaskDelay(d);
+  }
   M5.update();
-  commTask();
   if (M5.BtnA.wasReleased()) {
     MasterVolume--;
     if (MasterVolume < 0) {
