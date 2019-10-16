@@ -13,7 +13,7 @@ SPIClass *vspi = NULL;
 #define EndNote 128
 #define SampleRate 22050
 #define DMABufCount 16
-#define DMABufLength 64
+#define DMABufLength 128
 #define BarView true
 
 const uint8_t gainList[] = {
@@ -360,9 +360,9 @@ bool spiRead2(uint8_t res[3]) {
   static uint8_t data[3];
   uint8_t v;
   vspi->beginTransaction(settings);
-  digitalWrite(5, LOW); // pull SS slow to prep other end for transfer
+  digitalWrite(5, LOW);  // pull SS slow to prep other end for transfer
   v = vspi->transfer(0xFE);
-  digitalWrite(5, HIGH); // pull ss high to signify end of data transfer
+  digitalWrite(5, HIGH);  // pull ss high to signify end of data transfer
   vspi->endTransaction();
   if (v == last) {
     if (data[1] != 0x40) {
@@ -373,13 +373,16 @@ bool spiRead2(uint8_t res[3]) {
   if (v & 0x80) {
     stock = 0;
   }
-  data[stock] = v;
-  stock++;
+  if (stock < 3) {
+    data[stock] = v;
+    stock++;
+  }
   if (stock == 3) {
     res[0] = data[0];
     res[1] = data[1];
     res[2] = data[2];
     data[1] = 0;
+    stock = 0;
     return true;
   }
   return false;
@@ -428,7 +431,7 @@ void setup() {
   // for BEEP
   i2cWrite(0x16, 0x05);
   i2cWrite(0x17, 0x05);
-  i2cWrite(0x18, 0x01); // 2 times
+  i2cWrite(0x18, 0x01);  // 2 times
   i2cWrite(0x19, 0x88);
 
   // Master Gain
@@ -518,10 +521,10 @@ void audioTask(void *pvParameters) {
       .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
       .communication_format =
           (i2s_comm_format_t)(I2S_COMM_FORMAT_I2S | I2S_COMM_FORMAT_I2S_LSB),
-      .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1, // lowest interrupt priority
+      .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,  // lowest interrupt priority
       .dma_buf_count = DMABufCount,
       .dma_buf_len = DMABufLength,
-      .use_apll = true, // Use audio PLL
+      .use_apll = true,  // Use audio PLL
       .tx_desc_auto_clear = true,
       .fixed_mclk = SampleRate * 16 * 16,
   };
@@ -570,35 +573,35 @@ void audioTask(void *pvParameters) {
 void communicate(uint8_t data[3]) {
   uint8_t note, vel, num, val;
   switch (data[0]) {
-  case 0x90: // note-on
-    NoteOn(data[1], data[2]);
-    break;
-  case 0x80: // note-off
-    NoteOff(data[1], data[2]);
-    break;
-  case 0xb0: // controll-change
-    xSemaphoreTake(xMutex, portMAX_DELAY);
-    control[data[1]] = data[2];
-    xSemaphoreGive(xMutex);
-    M5.Lcd.setCursor(0, 160);
-    M5.Lcd.printf("ctrl: %03d, %03d \n", num, val);
-    break;
-  case 0xe0: // pitch-bend
-    num = data[1];
-    val = data[2] & 0x7f;
-    float p;
-    p = (float(val) - 64.0) / 63.0;
-    if (p < -1.0) {
-      p = -1.0;
-    }
-    xSemaphoreTake(xMutex, portMAX_DELAY);
-    pitch = p;
-    xSemaphoreGive(xMutex);
-    M5.Lcd.setCursor(0, 160);
-    M5.Lcd.printf("pitch: %03d, %+03d \n", num, val);
-    break;
-  default:
-    return;
+    case 0x90:  // note-on
+      NoteOn(data[1], data[2]);
+      break;
+    case 0x80:  // note-off
+      NoteOff(data[1], data[2]);
+      break;
+    case 0xb0:  // controll-change
+      xSemaphoreTake(xMutex, portMAX_DELAY);
+      control[data[1]] = data[2];
+      xSemaphoreGive(xMutex);
+      M5.Lcd.setCursor(0, 160);
+      M5.Lcd.printf("ctrl: %03d, %03d \n", num, val);
+      break;
+    case 0xe0:  // pitch-bend
+      num = data[1];
+      val = data[2] & 0x7f;
+      float p;
+      p = (float(val) - 64.0) / 63.0;
+      if (p < -1.0) {
+        p = -1.0;
+      }
+      xSemaphoreTake(xMutex, portMAX_DELAY);
+      pitch = p;
+      xSemaphoreGive(xMutex);
+      M5.Lcd.setCursor(0, 160);
+      M5.Lcd.printf("pitch: %03d, %+03d \n", num, val);
+      break;
+    default:
+      return;
   }
 }
 
@@ -607,7 +610,7 @@ void loop() {
     for (int j = 0; j < 3; j++) {
       uint8_t data[3];
       if (!spiRead2(data)) {
-        ets_delay_us(200);
+        ets_delay_us(100);
         continue;
       }
       M5.Lcd.setCursor(0, 190);
